@@ -1,0 +1,107 @@
+uC/OS-II@STC8H	PendSv	移植版	tzz1983   2024/5/4
+
+有个小项目需要使用数码管, 打算选用自带数码管驱动的型号STC8H4K64TL.
+习惯了用uC/OS做代码,又没找到合适的,于是就花了几天时间,自己移植了一个.
+
+
+我看过的 uC/OS-II-51核 移植版都是采用了堆栈向上增长的模式.
+而实际上,uC/OS管理的是xdata区的模拟栈.KeilC51模拟栈是向下增长的,
+这导至了uC/OS-II的许多新特性不能用,比如：OSTaskCreateExt(), 堆栈检查等功能.
+事实上,历史移植版本虽然用的是uC/OS-II的代码,却只实现在uC/OS-1的功能.
+
+
+简介:
+本移植版是完整的 uC/OS-II-51核 移植版, 并对51核的特殊性做了大量的优化.
+此移植版本使用 "PendSv" 中断切换任务.
+
+
+和以前移植版本相比较,一些新的特性描述如下：
+
+1.支持用户选择 small 或 large 编译模式, small 和 large 模式可以共存.
+2.OS切换上下文时,不关中断,中断可以快速响应.
+3.中断里不再需要使用 OSIntNesting++和OSIntExit().符合中断快进快出原则,也符合使用习惯.
+4.OS内核函数统一使用 small 编译模式,和用户选择无关,提高了效率.
+5.无论是 small 或 large 都已经做了reentrant支持. 无须选择或配制.
+6.完整的移植版本,uC/OS-II所有功能都可用.
+
+
+测试：
+
+例程已包含并通过了 "计数信号量,消息邮箱,标志集,邮箱队列,互斥信号量,内存管理,软件定时器,
+任务上锁/解锁,任务挂起/解挂,获取OS时间,统计任务,堆栈检查,"  的简单功能测试.
+
+移植版本于2024/5/4完成, 未经过长时间验证, 如果您将它用于项目, 请自行评估风险.
+
+
+使用：
+
+特别注意： os_cpu.h 中： #define  OS_STK_GROWTH   1  //定义栈的增长方向, 对应的是模拟栈, 向下增长
+
+创建任务时注意：栈顶是 &TASK_STK[STK_SIZE-1] , 栈底是&TASK_STK[0] . 这时和以前的移植版本刚好反了一下,所以特别提醒！
+
+调度器开启前不要打开EA, 启用调度器时会自动打开EA.
+
+请严格遵守临界区配对使用的原则.
+
+
+配制：
+
+small 或 large 编译模式可以自由选择,其它项目配制请参照例程.
+
+所有任务函数不要配制为可重入,并设置为调用树顶层,参照配制选项卡" LX51 Misc ".
+
+OS采用一个硬件中断来模拟PendSv行为, 用于切换任务.　PendSv占用一个中断源.
+
+配制PendSv： 详情请转至　os_cfg.h  os_cpu.h  os_cpu_a.c
+
+配制时钟源: 请转到 Config.h
+
+OS已占用定时器0用作系统滴答,最低侁级.
+
+
+
+关于先择编译模式：
+
+推荐选择 large 模式,省事省心. 
+用large模式时,xdata管够, 所以：用户函数的非可重入方式, 效率也不比 small+reentrant 模式低多少.
+
+
+可以选择 small 模式,但是全局变量和局部段会逐步吞噬掉DATA空间,需要引起注意. 
+一个有效的办法是全局变量显式指定存储类型, 同时用户函数也显式指定为 reentrant, 就不会有全局段和局部段侵占DATA空间的机会.
+但有仍有两个潜在的风险：
+1. small+reentrant 模式,可能会撑爆(idata)公共运行栈,所以如果你这么用,千万不要有很大尺寸的局部变量.
+2. 库函数只认全局设置属性,无法单独指定属性. 它可能成为侵占DATA的头号元凶.
+(最终建议：代码量较大时还是不要选择 small 模式, 太麻烦！)
+
+
+中断调用OS服务的注意事项：
+
+* 有许多OS服务是不可以在中断例程中调用的,
+* 原版的uCOS-II提供了OSIntNesting值来判断,
+* 可以检测到用户的错误调用,从而提前返回一个错误码.
+* 移植后的uCOS-II彻底取消了OSIntNesting
+* 所以需要用户自行甄别哪些OS服务是不可以在中断例程中调用的（ 比如OSTimeDly(),OSxxPend() 就是不可以在中断服务里调用的 )
+* 如何判断一个服务是否可以在中断例程中调用? 方法是: 通过查看原码,如果该服务不会返回中断调用错误码,
+* 同时也不会引起任务切换,就是通用服务,即->可以任务级调用,也可中断级调用. 否则不可中断调用.
+
+
+/*
+* 针对所有需要中断调用并且会引起任务切换的OS服务,移植版本提供了额外的中断调用版本,以下是新增中断服务的函数.
+*/
+INT8U  OSTaskSuspend_FROM_ISR (INT8U prio)FunctionProperties;
+INT8U  OSTaskResume_FROM_ISR (INT8U prio)FunctionProperties;
+INT8U  OSTaskChangePrio_FROM_ISR (INT8U  oldprio,INT8U  newprio)FunctionProperties;
+INT8U  OSTimeDlyResume_FROM_ISR (INT8U prio)FunctionProperties;
+INT8U  OSSemPendAbort_FROM_ISR (OS_EVENT *pevent, INT8U opt, INT8U *perr)FunctionProperties;
+INT8U  OSSemPost_FROM_ISR (OS_EVENT *pevent)FunctionProperties;
+OS_FLAGS  OSFlagPost_FROM_ISR (OS_FLAG_GRP  *pgrp, OS_FLAGS flags, INT8U opt, INT8U *perr)FunctionProperties;
+INT8U  OSMboxPostOpt_FROM_ISR (OS_EVENT  *pevent, void *pmsg, INT8U opt)FunctionProperties;
+INT8U  OSMboxPost_FROM_ISR (OS_EVENT  *pevent, void *pmsg)FunctionProperties;
+INT8U  OSMboxPendAbort_FROM_ISR (OS_EVENT  *pevent, INT8U opt, INT8U *perr)FunctionProperties;
+INT8U  OSQPendAbort_FROM_ISR (OS_EVENT  *pevent, INT8U opt, INT8U *perr)FunctionProperties;
+INT8U  OSQPost_FROM_ISR (OS_EVENT  *pevent, void *pmsg)FunctionProperties;
+INT8U  OSQPostFront_FROM_ISR (OS_EVENT  *pevent, void *pmsg)FunctionProperties;
+INT8U  OSQPostOpt_FROM_ISR (OS_EVENT  *pevent, void *pmsg, INT8U opt)FunctionProperties;
+
+
+
